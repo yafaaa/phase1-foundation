@@ -21,10 +21,10 @@ func main() {
 			counts[word]++
 		}
 
-		for word, freq := range counts {
-			if freq > 1 {
-				fmt.Println(word)
-			}
+	for word, freq := range counts {
+		if freq > 1 {
+			fmt.Println(word)
 		}
+	}
 	}
 }
