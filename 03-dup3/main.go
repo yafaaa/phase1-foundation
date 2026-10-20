@@ -9,31 +9,22 @@ import (
 func main() {
 	counts := make(map[string]int)
 
-	for _, filename := range os.Args[1:]{
+	for _, filename := range os.Args[1:] {
 		data, err := os.ReadFile(filename)
 
-		if err != nil{
-			fmt.Fprintf(os.Stderr, "dup3: %v\n", err)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error found: %v\n", err)
 			continue
 		}
 
-		
-		for _, line := range strings.Split(string(data), "\n"){
-			line = strings.TrimSpace(line)
-    
-			if line == "" {
-				continue
-			}
-			
-			counts[line]++		
+		for _, word := range strings.Fields(strings.TrimSpace(string(data))) {
+			counts[word]++
 		}
 
-		for line, freq := range counts{
-			if freq > 1{
-				fmt.Printf("%d\t%s\n", freq, line)
+		for word, freq := range counts {
+			if freq > 1 {
+				fmt.Println(word)
 			}
 		}
-
-
 	}
 }
