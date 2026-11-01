@@ -11,3 +11,37 @@
 * **The Fault (Human & Code Error):** To turn on the new software, engineers recycled an old digital switch (a True/False flag) that previously activated a dormant, automated testing program ("Power Peg") from 2003. When the master switch was flipped to "True" at the start of the trading day, Server 8 read it using its old software and woke up the dead testing code.
 
 * **The Systemic Failure:** Because the old testing code was designed to blindly buy stocks as fast as possible, and lacked any modern safety limits, Server 8 went rogue. It flooded the New York Stock Exchange with 4 million orders in 45 minutes, losing $460 million and bankrupting the company before engineers could physically unplug the server.
+
+flowchart TD
+    Client([User Client])
+
+    subgraph Write Path
+        App[Go Application Service]
+        PrimaryDB[(PostgreSQL\nSystem of Record)]
+    end
+
+    subgraph Event Pipeline
+        Kafka[[Kafka / CDC\nMessage Queue]]
+    end
+
+    subgraph Derived Data Systems / Read Paths
+        Cache[(Redis\nIn-Memory Cache)]
+        Search[(Elasticsearch\nFull-Text Index)]
+        DW[(Data Warehouse\nBatch Analytics)]
+    end
+
+    %% Write Flow
+    Client -- "1. Write Request (e.g. Update Price)" --> App
+    App -- "2. Save Canonical Data" --> PrimaryDB
+
+    %% Asynchronous Event Pipeline
+    PrimaryDB -- "3. Stream Data Changes" --> Kafka
+
+    %% Read Flows
+    Kafka -- "4a. Update Fast Cache" --> Cache
+    Kafka -- "4b. Update Search Index" --> Search
+    Kafka -- "4c. Load for Analytics" --> DW
+
+    %% Client Reads
+    Client -. "Read popular data" .-> Cache
+    Client -. "Search queries" .-> Search
