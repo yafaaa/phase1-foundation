@@ -12,6 +12,7 @@
 
 * **The Systemic Failure:** Because the old testing code was designed to blindly buy stocks as fast as possible, and lacked any modern safety limits, Server 8 went rogue. It flooded the New York Stock Exchange with 4 million orders in 45 minutes, losing $460 million and bankrupting the company before engineers could physically unplug the server.
 
+````mermaid`
 flowchart TD
     Client([User Client])
 
