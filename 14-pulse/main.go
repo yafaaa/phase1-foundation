@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -37,19 +40,67 @@ func pingOnce (client *http.Client, url string) PingResult {
 		LatencyMs: latencyMs,
 	}
 
+}
 
+func readURLS(filepath string) ([] string, error){
+	file, err := os.Open(filepath)
+
+	if err != nil {
+		return nil, err
+	}
+	
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var urls [] string
+	for scanner.Scan(){
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" || strings.HasPrefix(line, "#"){
+			continue
+		}
+		urls = append(urls, line)
+	}
+
+	if err := scanner.Err(); err != nil{
+		return nil, err
+	}
+	return urls, nil
 
 }
 
 func main(){
 
+	if len(os.Args) < 2 {
+		fmt.Println("Enter file name and try again")
+		os.Exit(1)
+	}
+
+	urls, err := readURLS(os.Args[1])
+
+	if err != nil{
+		fmt.Println("Unable to open file")
+		os.Exit(1)
+	}
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	res1 := pingOnce (client, "https://google.com")
-	res2 := pingOnce (client, "https://this-domian-does-not-exist-123.com")
-	fmt.Printf("result of google: %+v \n", res1)
-	fmt.Printf("result of domain: %+v \n", res2)
+	for _, url := range urls{
+		fmt.Printf("\n_____fetching link_____: %v\n", url)
+		for i:= 1; i<=5; i++{
+			res := pingOnce(client, url)
+			
+			if res.Err != nil{
+				fmt.Printf("  [Ping %d/5] ERROR (%.2f ms): %v\n", i, res.LatencyMs, res.Err)
+				continue
+			}
+			fmt.Printf("  [Ping %d/5] Status: %d | Latency: %.2f ms\n", i, res.StatusCode, res.LatencyMs)
+
+		}
+	}
+
+
 
 }
