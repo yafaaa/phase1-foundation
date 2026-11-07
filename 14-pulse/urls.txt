@@ -2,3 +2,4 @@
 https://google.com
 https://example.com
 https://this-domain-does-not-exist-123.com
+https://httpbin.org/delay/10
