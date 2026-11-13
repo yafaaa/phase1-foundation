@@ -1,5 +1,11 @@
-# Test endpoints for Pulse Week 1
+# 10 endpoints to test Pulse Week 2 (max 5 concurrent via semaphore)
 https://google.com
 https://example.com
-https://this-domain-does-not-exist-123.com
+https://github.com
+https://cloudflare.com
+https://wikipedia.org
+https://httpbin.org/get
+https://httpbin.org/status/404
+https://httpbin.org/delay/2
 https://httpbin.org/delay/10
+https://this-domain-does-not-exist-123.com
