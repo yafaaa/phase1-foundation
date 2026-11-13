@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,6 +16,7 @@ import (
 
 type PingResult struct {
 	URL string
+	PingNum int
 	StatusCode int
 	LatencyMs float64
 	Err error
@@ -110,6 +112,20 @@ func savePing(db *sql.DB, res PingResult) error {
 	}
 	return nil
 }
+
+func checkURL(client *http.Client, url string, wg *sync.WaitGroup, sem chan struct{}, results chan<- PingResult){
+	defer wg.Done()
+
+	sem <- struct{}{}
+	defer func ()  { <-sem}()
+
+	for i := 1; i <= 5; i++{
+		res := pingOnce(client, url)
+		res.PingNum = i
+		results <- res
+	}
+}
+
 func main(){
 
 	if len(os.Args) < 2 {
@@ -137,25 +153,31 @@ func main(){
 		Timeout: 5 * time.Second,
 	}
 
-	for _, url := range urls{
-		fmt.Printf("\n_____fetching link_____: %v\n", url)
-		for i:= 1; i<=5; i++{
-			res := pingOnce(client, url)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+	results := make(chan PingResult)
 
-			if err := savePing(db, res); err != nil{
-				fmt.Printf("Ping was not saved to database: url: %v		rank: %v	Error: %v\n", res.URL, i, err)
-			}
-			
-			if res.Err != nil{
-				fmt.Printf("  [Ping %d/5] ERROR (%.2f ms): %v\n", i, res.LatencyMs, res.Err)
-				continue
-			}
-			fmt.Printf("  [Ping %d/5] Status: %d | Latency: %.2f ms\n", i, res.StatusCode, res.LatencyMs)
-			
-			
-		}
+	for _, url := range urls{
+		wg.Add(1)
+		go checkURL(client, url, &wg, sem, results)
 	}
 
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for res := range results {
+		if err := savePing(db, res); err != nil {
+			fmt.Printf("  [DB Error] %s: %v\n", res.URL, err)
+		}
+
+		if res.Err != nil {
+			fmt.Printf("  [Ping %d/5] %-35s | ERROR (%.2f ms): %v\n", res.PingNum, res.URL, res.LatencyMs, res.Err)
+			continue
+		}
+		fmt.Printf("  [Ping %d/5] %-35s | Status: %d | Latency: %.2f ms\n", res.PingNum, res.URL, res.StatusCode, res.LatencyMs)
+	}
 
 
 }
