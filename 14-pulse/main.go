@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
+	"flag"
 	"io"
 	"net/http"
 	"os"
@@ -89,7 +90,11 @@ func initDB(dbpath string) (*sql.DB, error) {
 		latency_ms REAL NOT NULL,
 		error_msg TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`
+	);
+	
+	-- NEW: Composite B-Tree Index for fast time-series queries
+	CREATE INDEX IF NOT EXISTS idx_pings_url_created_at ON pings (url, created_at);
+	`
 
 	if _, err := db.Exec(schema); err != nil{
 		db.Close()
@@ -97,6 +102,33 @@ func initDB(dbpath string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func runHistoryCommand(db *sql.DB, args []string) {
+	historyCmd := flag.NewFlagSet("history", flag.ExitOnError)
+	urlFlag := historyCmd.String("url", "", "Target URL to inspect (e.g., https://google.com)")
+	lastFlag := historyCmd.String("last", "1h", "Lookback duration (e.g., 15m, 1h, 24h)")
+
+	
+	_ = historyCmd.Parse(args)
+
+	duration, err := time.ParseDuration(*lastFlag)
+	if err != nil {
+		fmt.Printf("Invalid --last duration %q: %v (use formats like 30m, 1h, 24h)\n", *lastFlag, err)
+		os.Exit(1)
+	}
+	
+	targetURL := strings.TrimSpace(*urlFlag)
+	if targetURL == "" {
+		fmt.Println("Error: --url flag is required (e.g., pulse history --url https://google.com --last 1h)")
+		os.Exit(1)
+	}
+
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "https://" + targetURL
+	}
+	
+	fmt.Printf("TODO: Query SQLite for %s over the last %v\n", targetURL, duration)
 }
 
 func savePing(db *sql.DB, res PingResult) error {
@@ -129,8 +161,22 @@ func checkURL(client *http.Client, url string, wg *sync.WaitGroup, sem chan stru
 func main(){
 
 	if len(os.Args) < 2 {
-		fmt.Println("Enter file name and try again")
+		fmt.Println("Usage:")
+		fmt.Println("  pulse <urls-file>")
+		fmt.Println("  pulse history --url <url> --last <duration>")
 		os.Exit(1)
+	}
+
+	db, err := initDB("pulse.db")
+	if err != nil {
+		fmt.Printf("Failed to initialize database: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if os.Args[1] == "history" {
+		runHistoryCommand(db, os.Args[2:])
+		return
 	}
 
 	urls, err := readURLS(os.Args[1])
@@ -139,15 +185,6 @@ func main(){
 		fmt.Printf("Unable to open file: %v\n", err)
 		os.Exit(1)
 	}
-
-	db, err := initDB("pulse.db")
-
-	if err != nil{
-		fmt.Printf("Failed to intialize database: %v\n", err)
-		os.Exit(1)
-	}
-
-	defer db.Close()
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -178,6 +215,5 @@ func main(){
 		}
 		fmt.Printf("  [Ping %d/5] %-35s | Status: %d | Latency: %.2f ms\n", res.PingNum, res.URL, res.StatusCode, res.LatencyMs)
 	}
-
 
 }
