@@ -128,7 +128,37 @@ func runHistoryCommand(db *sql.DB, args []string) {
 		targetURL = "https://" + targetURL
 	}
 	
-	fmt.Printf("TODO: Query SQLite for %s over the last %v\n", targetURL, duration)
+	cutoff := time.Now().UTC().Add(-duration).Format("2006-01-02 15:04:05")
+
+	query := `
+	SELECT
+		COUNT(*),
+		AVG(latency_ms),
+		MIN(latency_ms),
+		MAX(latency_ms)
+	FROM pings
+	WHERE url = ? AND created_at >= ? AND status_code > 0;`
+
+	var count int
+	var avgLatency, minLatency, maxLatency sql.NullFloat64
+
+	err = db.QueryRow(query, targetURL, cutoff).Scan(&count, &avgLatency, &minLatency, &maxLatency)
+	if err != nil {
+		fmt.Printf("Database query failed: %v\n", err)
+		os.Exit(1)
+	}
+	
+	fmt.Printf("\n=== Pulse History: %s (last %s) ===\n", targetURL, duration)
+	if count == 0 || !avgLatency.Valid {
+		fmt.Println("No successful pings recorded in this time window.")
+		return
+	}
+
+	fmt.Printf("Successful Pings : %d\n", count)
+	fmt.Printf("Average Latency  : %.2f ms\n", avgLatency.Float64)
+	fmt.Printf("Min Latency      : %.2f ms\n", minLatency.Float64)
+	fmt.Printf("Max Latency      : %.2f ms\n", maxLatency.Float64)
+
 }
 
 func savePing(db *sql.DB, res PingResult) error {
