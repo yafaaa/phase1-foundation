@@ -7,6 +7,7 @@ import (
 	"flag"
 	"io"
 	"net/http"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -186,6 +187,102 @@ func checkURL(client *http.Client, url string, wg *sync.WaitGroup, sem chan stru
 		res.PingNum = i
 		results <- res
 	}
+}
+
+type PingRow struct {
+	StatusCode int
+	LatencyMs  float64
+	CreatedAt  string
+}
+
+type StatsReport struct {
+	TotalCount   int
+	SuccessCount int
+	PacketLoss   float64
+	AvgLatency   float64
+	MinLatency   float64
+	MaxLatency   float64
+	JitterMs     float64
+	Trend        string
+}
+
+func calculateStats(row []PingRow) StatsReport{
+	report := StatsReport{TotalCount: len(row)}
+
+	if len(row) == 0{
+		return report
+	}
+	
+	var latencies []float64
+	var sum float64
+
+	for _, r := range row{
+
+		if r.StatusCode > 0{
+			latencies = append(latencies, r.LatencyMs)
+			sum += r.LatencyMs
+
+			if len(latencies) == 1 || r.LatencyMs < report.MinLatency{
+				report.MinLatency = r.LatencyMs
+			}
+
+			if r.LatencyMs > report.MaxLatency{
+				report.MaxLatency = r.LatencyMs
+			}	
+		}
+	}
+	report.PacketLoss = float64((report.TotalCount - report.SuccessCount)*100)/float64(report.TotalCount)
+	
+	if report.SuccessCount == 0{
+		report.Trend = "DOWN"
+		return report
+	}
+	
+	report.AvgLatency = sum/float64(report.SuccessCount)
+
+	if report.SuccessCount >= 2{
+		var varianceSum float64
+		for _, lat := range latencies{
+			diff := lat - report.AvgLatency
+			varianceSum += diff * diff
+		}
+		
+		report.JitterMs = math.Sqrt(varianceSum/float64(len(latencies)))
+	}
+	
+
+	if report.SuccessCount >= 6{
+		SplitIdx := report.SuccessCount - 5
+
+		baseline := mean(latencies[:SplitIdx])
+		recentAvg := mean(latencies[SplitIdx:])
+
+		if recentAvg > baseline * 1.25{
+			report.Trend = "DEGRADING"
+		}else if recentAvg < baseline * 0.85{
+			report.Trend = "IMPROVING"
+		}else {
+			report.Trend = "STABLE"
+		}
+
+	}else{
+		report.Trend = "INSUFFICIENT DATA"
+	}
+
+	return report
+}
+
+func mean(vals []float64) float64{
+	var sum float64
+
+	for _, val := range vals{
+		sum += val
+	}
+
+	if len(vals) == 0 {
+		return sum
+	}
+	return sum/float64(len(vals))
 }
 
 func main(){
