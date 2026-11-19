@@ -3,17 +3,26 @@ package main
 import (
 	"bufio"
 	"database/sql"
-	"fmt"
 	"flag"
+	"fmt"
 	"io"
-	"net/http"
 	"math"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
-
 	_ "modernc.org/sqlite"
+)
+
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorCyan   = "\033[36m"
+	colorBold   = "\033[1m"
 )
 
 type PingResult struct {
@@ -285,12 +294,173 @@ func mean(vals []float64) float64{
 	return sum/float64(len(vals))
 }
 
+func calculateHealthScore(r StatsReport) int{
+	if r.TotalCount == 0 || r.SuccessCount == 0 {
+		return 0
+	}
+	score := 100.0
+
+	score -= r.PacketLoss * 2.0
+
+	if r.AvgLatency > 100.0 {
+		pt := (r.AvgLatency - 100.0) * 0.05
+
+		if pt > 35.0{
+			pt = 35.0
+		}
+		score -= pt
+	}
+
+	if r.JitterMs > 15.0{
+		pt:= (r.JitterMs - 15.0) * 0.25
+
+		if pt > 15.0{
+			pt = 15.0
+		}
+		score -= pt
+	}
+
+	if score < 0{
+		return 0
+	}
+
+	return int(math.Round(score))
+}
+
+func printStatsTable(stats StatsReport, score int) {
+	scoreColor := colorGreen
+	statusLabel := "HEALTHY"
+	if score < 50 {
+		scoreColor = colorRed
+		statusLabel = "CRITICAL"
+	} else if score < 80 {
+		scoreColor = colorYellow
+		statusLabel = "DEGRADED"
+	}
+
+	trendColor := colorCyan
+	if stats.Trend == "DEGRADING" || stats.Trend == "DOWN" {
+		trendColor = colorRed
+	} else if stats.Trend == "IMPROVING" {
+		trendColor = colorGreen
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "METRIC\tVALUE\tSTATUS")
+	fmt.Fprintln(w, "------\t-----\t------")
+	fmt.Fprintf(w, "Health Score\t%s%d / 100%s\t%s\n", scoreColor, score, colorReset, statusLabel)
+	fmt.Fprintf(w, "Packet Loss\t%.1f%%\t(%d/%d succeeded)\n", stats.PacketLoss, stats.SuccessCount, stats.TotalCount)
+	fmt.Fprintf(w, "Avg Latency\t%.2f ms\tmin: %.2f ms | max: %.2f ms\n", stats.AvgLatency, stats.MinLatency, stats.MaxLatency)
+	fmt.Fprintf(w, "Jitter (StdDev)\t%.2f ms\t-\n", stats.JitterMs)
+	fmt.Fprintf(w, "Trend\t%s%s%s\t(last 5 vs baseline)\n", trendColor, stats.Trend, colorReset)
+	w.Flush()
+}
+
+func printASCIIGraph(rows []PingRow) {
+	fmt.Printf("\n%sLast %d Pings (Oldest -> Newest):%s\n", colorBold, len(rows), colorReset)
+
+	var maxLat float64
+	for _, r := range rows {
+		if r.StatusCode > 0 && r.LatencyMs > maxLat {
+			maxLat = r.LatencyMs
+		}
+	}
+	if maxLat == 0 {
+		maxLat = 1.0
+	}
+
+	const maxBarWidth = 35
+	for i, r := range rows {
+		if r.StatusCode == 0 {
+			fmt.Printf("  #%02d | %s✖ FAILED / TIMEOUT (%.0f ms)%s\n", i+1, colorRed, r.LatencyMs, colorReset)
+			continue
+		}
+
+		barLen := int(math.Round((r.LatencyMs / maxLat) * maxBarWidth))
+		if barLen < 1 {
+			barLen = 1
+		}
+
+		barColor := colorGreen
+		if r.LatencyMs > 250.0 {
+			barColor = colorYellow
+		}
+
+		bar := strings.Repeat("█", barLen)
+		fmt.Printf("  #%02d | %s%s%s %.2f ms\n", i+1, barColor, bar, colorReset, r.LatencyMs)
+	}
+}
+
+func runAnalyzeCommand(db *sql.DB, args []string){
+	analysisCmd := flag.NewFlagSet("analyze", flag.ExitOnError)
+	urlFlag := analysisCmd.String("url", "", "Target URL to analyze (e.g., google.com)")
+	_ = analysisCmd.Parse(args)
+
+	targetURL := strings.TrimSpace(*urlFlag)
+	if targetURL == ""{
+		fmt.Println("Error: --url flag is required")
+		os.Exit(1)
+	}
+	if !strings.HasPrefix(targetURL, "https://") || !strings.HasPrefix(targetURL, "https://"){
+		targetURL = "https://" + targetURL
+	}
+
+	query := `
+	SELECT status_code, latency_ms, created_at
+	FROM pings
+	WHERE url = ?
+	ORDER BY id DESC
+	LIMIT 20;`
+
+	dbRows, err := db.Query(query, targetURL)
+
+	if err != nil{
+		fmt.Println("Failed to process query")
+		os.Exit(1)
+	}
+
+	defer dbRows.Close()
+
+	var rows []PingRow
+	for dbRows.Next(){
+		var r PingRow
+		if err := dbRows.Scan(&r.StatusCode, &r.LatencyMs, &r.CreatedAt); err != nil{
+			fmt.Printf("Row scan failed: %v\n", err)
+			os.Exit(1)
+		}
+		rows = append(rows, r)
+	}
+	if err := dbRows.Err(); err != nil {
+		fmt.Printf("Row iteration error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(rows) == 0{
+		fmt.Printf("No ping records found for %s. Run `./pulse urls.txt` first.\n", targetURL)
+		return
+	}
+
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+
+	stats := calculateStats(rows)
+	score := calculateHealthScore(stats)
+
+	fmt.Printf("\n%s=== Pulse Network Analysis: %s ===%s\n\n", colorBold, targetURL, colorReset)
+	printStatsTable(stats, score)
+	printASCIIGraph(rows)
+
+}
+
+
 func main(){
 
 	if len(os.Args) < 2 {
 		fmt.Println("Usage:")
 		fmt.Println("  pulse <urls-file>")
 		fmt.Println("  pulse history --url <url> --last <duration>")
+		fmt.Println("  pulse analyze --url <url>")
 		os.Exit(1)
 	}
 
@@ -305,7 +475,10 @@ func main(){
 		runHistoryCommand(db, os.Args[2:])
 		return
 	}
-
+	if os.Args[1] == "analyze" {
+		runAnalyzeCommand(db, os.Args[2:])
+		return
+	}
 	urls, err := readURLS(os.Args[1])
 
 	if err != nil{
